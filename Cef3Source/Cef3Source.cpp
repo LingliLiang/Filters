@@ -36,7 +36,7 @@ CCefPushPin::CCefPushPin(HRESULT *phr, CSource *pFilter)
 		m_bGrabBuffer(FALSE),
 		m_hThread(NULL),
 		m_hNewGrabEvent(NULL),
-		m_pBuffer(NULL)
+		m_Queue(64)
 {
     // Get the device context of the main display
     HDC hDC;
@@ -51,8 +51,7 @@ CCefPushPin::CCefPushPin(HRESULT *phr, CSource *pFilter)
     m_iImageWidth  = m_rScreen.right  - m_rScreen.left;
     m_iImageHeight = m_rScreen.bottom - m_rScreen.top;
 	m_ulBufferSize = m_iImageWidth*m_iImageHeight*4;
-	m_pBuffer = new BYTE[m_ulBufferSize];
-	memset(m_pBuffer,0,m_ulBufferSize);
+
     // Release the device context
     DeleteDC(hDC);
 	m_hNewRenderEvent = ::CreateEvent(NULL, FALSE, FALSE, NULL);
@@ -63,13 +62,9 @@ CCefPushPin::CCefPushPin(HRESULT *phr, CSource *pFilter)
 CCefPushPin::~CCefPushPin()
 {   
     DbgLog((LOG_TRACE, 3, TEXT("Frames written %d"), m_iFrameNumber));
+	ClearQueue();
 	::CloseHandle(m_hNewRenderEvent);
 	m_hNewRenderEvent = NULL;
-	if(m_pBuffer)
-	{
-		delete m_pBuffer;
-		m_pBuffer = NULL;
-	}
 }
 
 
@@ -277,20 +272,48 @@ HRESULT CCefPushPin::FillBuffer(IMediaSample *pSample)
 
 	// Copy the DIB bits over into our filter's output buffer.
     // Since sample size may be larger than the image size, bound the copy size.
-    int nSize = min(pVih->bmiHeader.biSizeImage, (DWORD) cbData);
+    int nSize = std::min(pVih->bmiHeader.biSizeImage, (DWORD) cbData);
 
-	if(m_renderMode == WindowLess)
-	{
-		CAutoLock cAutoLockShared(&m_cGrabOpt);
-		memcpy_s(pData,cbData,m_pBuffer,nSize);
-	}
-	else
-	{
-		while (true)
+	Command com;
+	
+	do{
+		BOOL bHaveSample = FALSE;
+		//CAutoLock cAutoLockShared(&m_cGrabOpt);
+		while (!CheckRequest(&com))
 		{
-			WaitForSingleObject(m_hNewRenderEvent, 100);
-			::ResetEvent(m_hNewRenderEvent);
+			if(!m_Queue.empty())
+			{
+				_tagRenderBuffer release;
+				assert(m_Queue.lock_pop(release));
+				memcpy_s(pData,cbData,release.pBuffer,nSize);
+				delete [] release.pBuffer;
+				::OutputDebugString(_T("New render buffer\n"));
+				bHaveSample = TRUE;
+				break;
+			}
+			else
+			{
+				WaitForSingleObject(m_hNewRenderEvent, 30);
+				::ResetEvent(m_hNewRenderEvent);
+				::OutputDebugString(_T("Waiting render buffer\n"));
+			}
 		}
+		if (bHaveSample){
+			break;
+		}
+
+		if (com == CMD_RUN || com == CMD_PAUSE) {
+			Reply(NOERROR);
+		} else if (com != CMD_STOP) {
+			Reply((DWORD) E_UNEXPECTED);
+			DbgLog((LOG_ERROR, 1, TEXT("Unexpected command!!!")));
+		}
+	}while(com != CMD_STOP);
+
+	if (com == CMD_STOP)
+	{
+		ATLTRACE(_T("End of stream.\n"));
+		return S_FALSE;	//End of stream
 	}
 
 	// Set the timestamps that will govern playback frame rate.
@@ -321,11 +344,13 @@ HRESULT CCefPushPin::OnThreadDestroy(void)
 {
 	if (m_renderMode != WindowLess)
 		StopGrabThread();
+	m_bGrabBuffer = 0;
 	return __super::OnThreadDestroy();
 }
 
 HRESULT CCefPushPin::OnThreadStartPlay(void)
 {
+	m_bGrabBuffer = 1;
 	return __super::OnThreadStartPlay();
 }
 
@@ -389,11 +414,33 @@ void CCefPushPin::DoGrab()
 void CCefPushPin::RenderBuffer(void * pBuffer, ULONG len)
 {
 	{
-		CAutoLock cAutoLockShared(&m_cGrabOpt);
+		//CAutoLock cAutoLockShared(&m_cGrabOpt);
 		assert(len == m_ulBufferSize);
-		memcpy_s(m_pBuffer,len,pBuffer,len);
+
+		_tagRenderBuffer buffer={m_ulBufferSize,new BYTE[m_ulBufferSize]};
+		memcpy_s(buffer.pBuffer,m_ulBufferSize,pBuffer,m_ulBufferSize);
+		if(!m_Queue.lock_push(buffer))
+		{
+			//push failed ,queue if full
+			assert(m_Queue.full());
+			_tagRenderBuffer release;
+			m_Queue.lock_pop(release);
+			delete [] release.pBuffer;
+			assert(m_Queue.push(buffer));
+		}
 	}
 	::SetEvent(m_hNewRenderEvent);
+	::OutputDebugString(_T("RenderBuffer\n"));
+}
+
+void CCefPushPin::ClearQueue()
+{
+	while(!m_Queue.empty())
+	{
+		_tagRenderBuffer release;
+		m_Queue.lock_pop(release);
+		delete [] release.pBuffer;
+	}
 }
 
 /**
@@ -480,8 +527,10 @@ HRESULT CCefSource::Load(
 
 		 if (!m_pFileName.IsEmpty())
 		{
-
-		}
+		//	m_iImageWidth  = m_rScreen.right  - m_rScreen.left;
+		//	m_iImageHeight = m_rScreen.bottom - m_rScreen.top;
+		//	m_ulBufferSize = m_iImageWidth*m_iImageHeight*4;
+		 }
 		 m_pPin->m_fps = 12;
 		 m_pPin->m_viewRc = CRect(0,0,m_pPin->m_iImageWidth,m_pPin->m_iImageHeight);
 		 if(m_pPin->IsInitialized())

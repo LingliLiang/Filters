@@ -1,4 +1,5 @@
 #include "BrowserEventHandler.h"
+#include "RingQueue.h"
 
 class CCefSource;
 
@@ -40,19 +41,28 @@ private:
 	//envents handler for browser
 	virtual void RenderBuffer(void * pBuffer, ULONG len);
 
+	void ClearQueue();
+
 private:
 	//HDC grab thread, when webbrowser in popup mode
 	BOOL StartGrabThread();
 	BOOL StopGrabThread();
 	static DWORD WINAPI GrabThreadProc(LPVOID lpParameter);
 	void DoGrab();
+
 	HANDLE m_hThread;
 	HANDLE m_hNewGrabEvent;
 	BOOL m_bGrabBuffer; 
 
 	HANDLE m_hNewRenderEvent;
+	struct _tagRenderBuffer
+	{
+		ULONG ulBufferSize;
+		BYTE* pBuffer;
+	};
 
-	BYTE* m_pBuffer;
+	uqueue::RingQueue<_tagRenderBuffer> m_Queue;
+
 	ULONG m_ulBufferSize;
 
 	CCritSec m_cGrabOpt;
