@@ -36,7 +36,7 @@ CCefPushPin::CCefPushPin(HRESULT *phr, CSource *pFilter)
 		m_bGrabBuffer(FALSE),
 		m_hThread(NULL),
 		m_hNewGrabEvent(NULL),
-		m_Queue(64)
+		m_Queue(8) // big queue take more memory,so set small size
 {
     // Get the device context of the main display
     HDC hDC;
@@ -54,16 +54,16 @@ CCefPushPin::CCefPushPin(HRESULT *phr, CSource *pFilter)
 
     // Release the device context
     DeleteDC(hDC);
-	m_hNewRenderEvent = ::CreateEvent(NULL, FALSE, FALSE, NULL);
-	assert(m_hNewRenderEvent);
-	::ResetEvent(m_hNewRenderEvent);
+	//m_hNewRenderEvent = ::CreateEvent(NULL, FALSE, FALSE, NULL);
+	//assert(m_hNewRenderEvent);
+	//::ResetEvent(m_hNewRenderEvent);
 }
 
 CCefPushPin::~CCefPushPin()
 {   
     DbgLog((LOG_TRACE, 3, TEXT("Frames written %d"), m_iFrameNumber));
 	ClearQueue();
-	::CloseHandle(m_hNewRenderEvent);
+	//::CloseHandle(m_hNewRenderEvent);
 	m_hNewRenderEvent = NULL;
 }
 
@@ -281,22 +281,27 @@ HRESULT CCefPushPin::FillBuffer(IMediaSample *pSample)
 		//CAutoLock cAutoLockShared(&m_cGrabOpt);
 		while (!CheckRequest(&com))
 		{
-			if(!m_Queue.empty())
+			//buffer won't free when ref is big than 1,'release' is just name;
+			ScopedPtr<_tagRenderBuffer> release(0); 
+			if(m_Queue.empty()) 
 			{
-				_tagRenderBuffer release;
+				::Sleep(100);
+				continue;
+			}
+			if(m_Queue.size() > 1)
+			{
 				assert(m_Queue.lock_pop(release));
-				memcpy_s(pData,cbData,release.pBuffer,nSize);
-				delete [] release.pBuffer;
+				memcpy_s(pData,cbData,release->pBuffer,nSize);
 				::OutputDebugString(_T("New render buffer\n"));
-				bHaveSample = TRUE;
-				break;
 			}
 			else
 			{
-				WaitForSingleObject(m_hNewRenderEvent, 30);
-				::ResetEvent(m_hNewRenderEvent);
-				::OutputDebugString(_T("Waiting render buffer\n"));
+				ScopedPtr<_tagRenderBuffer>& front = m_Queue.front();
+				memcpy_s(pData,cbData,front->pBuffer,nSize);
+				::OutputDebugString(_T("Front render buffer\n"));
 			}
+			bHaveSample = TRUE;
+			break;
 		}
 		if (bHaveSample){
 			break;
@@ -344,13 +349,18 @@ HRESULT CCefPushPin::OnThreadDestroy(void)
 {
 	if (m_renderMode != WindowLess)
 		StopGrabThread();
-	m_bGrabBuffer = 0;
+	else
+	{
+		if(IsInitialized())
+			UnInit();
+	}
 	return __super::OnThreadDestroy();
 }
 
 HRESULT CCefPushPin::OnThreadStartPlay(void)
 {
-	m_bGrabBuffer = 1;
+	if(m_renderMode == WindowLess &&!IsInitialized())
+		InitInstance();
 	return __super::OnThreadStartPlay();
 }
 
@@ -401,7 +411,7 @@ void CCefPushPin::DoGrab()
 		{
 			CAutoLock cAutoLockShared(&m_cGrabOpt);
 			//hDib = CopyScreenToBitmap(&m_rScreen, m_pBuffer, (BITMAPINFO *) &(m_header));
-			::SetEvent(m_hNewRenderEvent);
+			//::SetEvent(m_hNewRenderEvent);
 		}
 		if (hDib) DeleteObject(hDib);
 		::WaitForSingleObject(m_hNewGrabEvent, lFps);
@@ -416,31 +426,24 @@ void CCefPushPin::RenderBuffer(void * pBuffer, ULONG len)
 	{
 		//CAutoLock cAutoLockShared(&m_cGrabOpt);
 		assert(len == m_ulBufferSize);
-
-		_tagRenderBuffer buffer={m_ulBufferSize,new BYTE[m_ulBufferSize]};
-		memcpy_s(buffer.pBuffer,m_ulBufferSize,pBuffer,m_ulBufferSize);
+		ScopedPtr<_tagRenderBuffer> buffer(new _tagRenderBuffer);
+		buffer->NewAndCopy(pBuffer,len);
 		if(!m_Queue.lock_push(buffer))
 		{
 			//push failed ,queue if full
 			assert(m_Queue.full());
-			_tagRenderBuffer release;
+			ScopedPtr<_tagRenderBuffer> release(0);
 			m_Queue.lock_pop(release);
-			delete [] release.pBuffer;
 			assert(m_Queue.push(buffer));
 		}
 	}
-	::SetEvent(m_hNewRenderEvent);
+	//::SetEvent(m_hNewRenderEvent);
 	::OutputDebugString(_T("RenderBuffer\n"));
 }
 
 void CCefPushPin::ClearQueue()
 {
-	while(!m_Queue.empty())
-	{
-		_tagRenderBuffer release;
-		m_Queue.lock_pop(release);
-		delete [] release.pBuffer;
-	}
+	//won't need clear, is auto free
 }
 
 /**
@@ -468,8 +471,6 @@ CCefSource::CCefSource(IUnknown *pUnk, HRESULT *phr)
 
 CCefSource::~CCefSource()
 {
-	if(m_pPin->IsInitialized())
-		m_pPin->UnInit();
 	delete m_pPin;
 	::CoUninitialize();
 }
@@ -531,11 +532,11 @@ HRESULT CCefSource::Load(
 		//	m_iImageHeight = m_rScreen.bottom - m_rScreen.top;
 		//	m_ulBufferSize = m_iImageWidth*m_iImageHeight*4;
 		 }
-		 m_pPin->m_fps = 12;
+		 m_pPin->m_fps = 15;
+		 char a[10] = {0};
 		 m_pPin->m_viewRc = CRect(0,0,m_pPin->m_iImageWidth,m_pPin->m_iImageHeight);
-		 if(m_pPin->IsInitialized())
-			   return E_UNEXPECTED;
-		return m_pPin->InitInstance();
+		 CCefPushPin::ScopedPtr<CCefPushPin::_tagRenderBuffer> buffer(new CCefPushPin::_tagRenderBuffer);
+		buffer->NewAndCopy(a,10);
 #ifdef DEBUG
 	ATLTRACE("CCefSource::Load\n");
 #endif
