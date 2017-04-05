@@ -19,6 +19,204 @@ const REFERENCE_TIME FPS_1  = UNITS / 1;
 // Default capture and display desktop 10 times per second
 const REFERENCE_TIME rtDefaultFrameLength = FPS_10;
 
+void SaveToFile(HDC hdcWnd,HBITMAP & hSrc,LPCTSTR fileName)
+{
+	BITMAP bmpSrc;
+	// Get the BITMAP from the HBITMAP
+	GetObject(hSrc, sizeof(BITMAP), &bmpSrc);
+
+	BITMAPFILEHEADER   bmfHeader;
+	BITMAPINFOHEADER   bi;
+
+	bi.biSize = sizeof(BITMAPINFOHEADER);
+	bi.biWidth = bmpSrc.bmWidth;
+	bi.biHeight = bmpSrc.bmHeight;
+	bi.biPlanes = 1;
+	bi.biBitCount = 32;
+	bi.biCompression = BI_RGB;
+	bi.biSizeImage = 0;
+	bi.biXPelsPerMeter = 0;
+	bi.biYPelsPerMeter = 0;
+	bi.biClrUsed = 0;
+	bi.biClrImportant = 0;
+
+	DWORD dwBmpSize = ((bmpSrc.bmWidth * bi.biBitCount + 31) / 32) * 4 * bmpSrc.bmHeight;
+
+	// Starting with 32-bit Windows, GlobalAlloc and LocalAlloc are implemented as wrapper functions that 
+	// call HeapAlloc using a handle to the process's default heap. Therefore, GlobalAlloc and LocalAlloc 
+	// have greater overhead than HeapAlloc.
+	HANDLE hDIB = GlobalAlloc(GHND, dwBmpSize);
+	char *lpbitmap = (char *)GlobalLock(hDIB);
+
+	// Gets the "bits" from the bitmap and copies them into a buffer 
+	// which is pointed to by lpbitmap.
+	GetDIBits(hdcWnd, hSrc, 0,
+		(UINT)bmpSrc.bmHeight,
+		lpbitmap,
+		(BITMAPINFO *)&bi, DIB_RGB_COLORS);
+
+	// A file is created, this is where we will save the screen capture.
+	HANDLE hFile = CreateFile(fileName,
+		GENERIC_WRITE,
+		0,
+		NULL,
+		CREATE_ALWAYS,
+		FILE_ATTRIBUTE_NORMAL, NULL);
+
+	// Add the size of the headers to the size of the bitmap to get the total file size
+	DWORD dwSizeofDIB = dwBmpSize + sizeof(BITMAPFILEHEADER) + sizeof(BITMAPINFOHEADER);
+
+	//Offset to where the actual bitmap bits start.
+	bmfHeader.bfOffBits = (DWORD)sizeof(BITMAPFILEHEADER) + (DWORD)sizeof(BITMAPINFOHEADER);
+
+	//Size of the file
+	bmfHeader.bfSize = dwSizeofDIB;
+
+	//bfType must always be BM for Bitmaps
+	bmfHeader.bfType = 0x4D42; //BM   
+
+	DWORD dwBytesWritten = 0;
+	WriteFile(hFile, (LPSTR)&bmfHeader, sizeof(BITMAPFILEHEADER), &dwBytesWritten, NULL);
+	WriteFile(hFile, (LPSTR)&bi, sizeof(BITMAPINFOHEADER), &dwBytesWritten, NULL);
+	WriteFile(hFile, (LPSTR)lpbitmap, dwBmpSize, &dwBytesWritten, NULL);
+
+	//Unlock and Free the DIB from the heap
+	GlobalUnlock(hDIB);
+	GlobalFree(hDIB);
+
+	//Close the handle for the file that was created
+	CloseHandle(hFile);
+}
+
+BOOL CopyWndToByte(HWND hWnd, CRect rect_fitin, BYTE* &pData_out,ULONG cbLen)
+{
+	BOOL result = 0;
+	DWORD err = 0;
+	CRect cliRc;
+	CRect wndRc;
+	CPoint ptlt;
+	::GetClientRect(hWnd,&cliRc);
+	::GetWindowRect(hWnd, &wndRc);
+	ptlt.SetPoint(cliRc.left, cliRc.top);
+	::ClientToScreen(hWnd,&ptlt);
+	ptlt.x -= wndRc.left;
+	ptlt.y -= wndRc.top;
+	cliRc.OffsetRect(ptlt);
+	int nWidth = cliRc.Width();
+	int nHeight = cliRc.Height();
+
+	HDC hdcScreen;
+	HDC hdcWindow;
+	HDC hdcMemDC = NULL;
+	HBITMAP hbmScreen = NULL;
+
+	// Retrieve the handle to a display device context for the client 
+	// area of the window. 
+	hdcScreen = GetDC(NULL);
+	hdcWindow = GetDC(hWnd);
+
+	// Create a compatible DC which is used in a BitBlt from the window DC
+	hdcMemDC = CreateCompatibleDC(hdcWindow);
+
+	if (!hdcMemDC)
+	{
+		MessageBox(hWnd, L"CreateCompatibleDC has failed", L"Failed", MB_OK);
+		goto done;
+	}
+
+	// Get the client area for size calculation
+	RECT rcClient;
+	GetClientRect(hWnd, &rcClient);
+
+	//This is the best stretch mode
+	SetStretchBltMode(hdcWindow, HALFTONE);
+
+	//The source DC is the entire screen and the destination DC is the current window (HWND)
+	if (!StretchBlt(hdcWindow,
+		0, 0,
+		rcClient.right, rcClient.bottom,
+		hdcScreen,
+		0, 0,
+		GetSystemMetrics(SM_CXSCREEN),
+		GetSystemMetrics(SM_CYSCREEN),
+		SRCCOPY))
+	{
+		MessageBox(hWnd, L"StretchBlt has failed", L"Failed", MB_OK);
+		goto done;
+	}
+
+	// Create a compatible bitmap from the Window DC
+	hbmScreen = CreateCompatibleBitmap(hdcWindow, rcClient.right - rcClient.left, rcClient.bottom - rcClient.top);
+
+	if (!hbmScreen)
+	{
+		MessageBox(hWnd, L"CreateCompatibleBitmap Failed", L"Failed", MB_OK);
+		goto done;
+	}
+
+	// Select the compatible bitmap into the compatible memory DC.
+	SelectObject(hdcMemDC, hbmScreen);
+
+	// Bit block transfer into our compatible memory DC.
+	if (!BitBlt(hdcMemDC,
+		0, 0,
+		rcClient.right - rcClient.left, rcClient.bottom - rcClient.top,
+		hdcWindow,
+		0, 0,
+		SRCCOPY))
+	{
+		MessageBox(hWnd, L"BitBlt has failed", L"Failed", MB_OK);
+		goto done;
+	}
+
+	
+
+	//Clean up
+done:
+	DeleteObject(hbmScreen);
+	DeleteObject(hdcMemDC);
+	ReleaseDC(NULL, hdcScreen);
+	ReleaseDC(hWnd, hdcWindow);
+
+	return 1;
+
+
+
+
+	BITMAPINFOHEADER bphdr = {
+		sizeof(BITMAPINFOHEADER),
+		rect_fitin.Width(),
+		rect_fitin.Height(),
+		1,
+		32,
+		BI_RGB,cbLen,
+		0,0,0,0
+	};
+
+	HDC hWndDC = GetDC(hWnd);
+	HDC hCaptureDC = CreateCompatibleDC(hWndDC);
+	HBITMAP hCaptureBitmap = CreateCompatibleBitmap(hWndDC, rect_fitin.Width(), rect_fitin.Height());
+	SelectObject(hCaptureDC, hCaptureBitmap);
+	//BitBlt(hCaptureDC, 0, 0, nWidth, nHeight, hWndDC, 0, 0, SRCCOPY | CAPTUREBLT);
+	//CreateBitmap(rect_fitin.Width(), rect_fitin.Height(), 1, 32, NULL);
+	//only use client are
+	SetStretchBltMode(hCaptureDC, COLORONCOLOR);
+	result = StretchBlt(hCaptureDC, 0, 0, rect_fitin.Width(), rect_fitin.Height(),
+		hWndDC, cliRc.left, cliRc.top, nWidth, nHeight, DIB_RGB_COLORS);
+	err = ::GetLastError();
+	//GetBitmapBits(hScrDC, hBitmap, 0, nHeight, pData, &bphdr, DIB_RGB_COLORS);
+	//assert(pData_out);
+	pData_out = new BYTE[cbLen];
+	memset(pData_out,0, cbLen);
+	ERROR_INVALID_PARAMETER;
+	result = GetDIBits(hWndDC, hCaptureBitmap, 0, rect_fitin.Height(), pData_out, (BITMAPINFO *) &bphdr, DIB_RGB_COLORS);
+	err = ::GetLastError();
+	ReleaseDC(hWnd, hWndDC);
+	DeleteDC(hCaptureDC);
+	DeleteObject(hCaptureBitmap);
+	return true;
+}
+
 /**
 *
 *  CCefPushPin Class
@@ -36,7 +234,7 @@ CCefPushPin::CCefPushPin(HRESULT *phr, CSource *pFilter)
 		m_bGrabBuffer(FALSE),
 		m_hThread(NULL),
 		m_hNewGrabEvent(NULL),
-		m_Queue(8) // big queue take more memory,so set small size
+		m_Queue(32) // big queue take more memory,so set small size
 {
     // Get the device context of the main display
     HDC hDC;
@@ -282,7 +480,8 @@ HRESULT CCefPushPin::FillBuffer(IMediaSample *pSample)
 		while (!CheckRequest(&com))
 		{
 			//buffer won't free when ref is big than 1,'release' is just name;
-			ScopedPtr<_tagRenderBuffer> release(0); 
+			//but , by using PassPtr<> now will be free.
+			PassPtr<_tagRenderBuffer> release(0);
 			if(m_Queue.empty()) 
 			{
 				::Sleep(100);
@@ -296,7 +495,7 @@ HRESULT CCefPushPin::FillBuffer(IMediaSample *pSample)
 			}
 			else
 			{
-				ScopedPtr<_tagRenderBuffer>& front = m_Queue.front();
+				PassPtr<_tagRenderBuffer>& front = m_Queue.front();
 				memcpy_s(pData,cbData,front->pBuffer,nSize);
 				::OutputDebugString(_T("Front render buffer\n"));
 			}
@@ -342,6 +541,8 @@ HRESULT CCefPushPin::OnThreadCreate(void)
 {
 	if(m_renderMode != WindowLess)
 		StartGrabThread();
+	if(!IsInitialized())
+		InitInstance();
 	return __super::OnThreadCreate();
 }
 
@@ -359,8 +560,6 @@ HRESULT CCefPushPin::OnThreadDestroy(void)
 
 HRESULT CCefPushPin::OnThreadStartPlay(void)
 {
-	if(m_renderMode == WindowLess &&!IsInitialized())
-		InitInstance();
 	return __super::OnThreadStartPlay();
 }
 
@@ -399,18 +598,33 @@ DWORD WINAPI CCefPushPin::GrabThreadProc(LPVOID lpParameter)
 void CCefPushPin::DoGrab()
 {
 	long lFps = (LONG)m_rtFrameLength / 10000;
-	long bFlag = 0;
-	if(lFps<16) lFps = 16;
+	long bFlag = 1;
 	m_hNewGrabEvent = ::CreateEvent(NULL, FALSE, FALSE, NULL);
 	assert(m_hNewGrabEvent);
 	if (!m_hNewGrabEvent) return ;
-	while(m_bGrabBuffer)
+	HWND HBrowser = NULL;
+	while (!IsInitialized())
 	{
+		::Sleep(100); //wait init
+		if (m_bGrabBuffer == 0) { bFlag = 0;break; }
+	}
+	if (bFlag)
+	{
+		HBrowser = (HWND)m_spBrowser->GetBrowserWnd();
+	}
+	assert(HBrowser);
+	while (m_bGrabBuffer)
+	{
+		
 		//Grab webbrowser instance buffer
 		HDIB hDib = NULL;
 		{
-			CAutoLock cAutoLockShared(&m_cGrabOpt);
-			//hDib = CopyScreenToBitmap(&m_rScreen, m_pBuffer, (BITMAPINFO *) &(m_header));
+			PassPtr<_tagRenderBuffer> buffer(new _tagRenderBuffer); //auto free
+			if (CopyWndToByte(HBrowser, m_viewRc, buffer->pBuffer, m_ulBufferSize))
+			{
+				buffer->ulBufferSize = m_ulBufferSize;
+				m_Queue.push(buffer); // if failed will drop this frame
+			}
 			//::SetEvent(m_hNewRenderEvent);
 		}
 		if (hDib) DeleteObject(hDib);
@@ -423,21 +637,17 @@ void CCefPushPin::DoGrab()
 
 void CCefPushPin::RenderBuffer(void * pBuffer, ULONG len)
 {
+	assert(len == m_ulBufferSize);
+	PassPtr<_tagRenderBuffer> buffer(new _tagRenderBuffer);
+	buffer->NewAndCopy(pBuffer, len);
+	if (!m_Queue.push(buffer)) //pass end buffer is invaild
 	{
-		//CAutoLock cAutoLockShared(&m_cGrabOpt);
-		assert(len == m_ulBufferSize);
-		ScopedPtr<_tagRenderBuffer> buffer(new _tagRenderBuffer);
-		buffer->NewAndCopy(pBuffer,len);
-		if(!m_Queue.lock_push(buffer))
-		{
-			//push failed ,queue if full
-			assert(m_Queue.full());
-			ScopedPtr<_tagRenderBuffer> release(0);
-			m_Queue.lock_pop(release);
-			assert(m_Queue.push(buffer));
-		}
+		//push failed ,queue if full
+		assert(m_Queue.full());
+		PassPtr<_tagRenderBuffer> release(0);
+		m_Queue.lock_pop(release);
+		assert(m_Queue.push(buffer));
 	}
-	//::SetEvent(m_hNewRenderEvent);
 	::OutputDebugString(_T("RenderBuffer\n"));
 }
 
@@ -532,11 +742,9 @@ HRESULT CCefSource::Load(
 		//	m_iImageHeight = m_rScreen.bottom - m_rScreen.top;
 		//	m_ulBufferSize = m_iImageWidth*m_iImageHeight*4;
 		 }
-		 m_pPin->m_fps = 15;
-		 char a[10] = {0};
+		 m_pPin->m_fps = 30;
 		 m_pPin->m_viewRc = CRect(0,0,m_pPin->m_iImageWidth,m_pPin->m_iImageHeight);
-		 CCefPushPin::ScopedPtr<CCefPushPin::_tagRenderBuffer> buffer(new CCefPushPin::_tagRenderBuffer);
-		buffer->NewAndCopy(a,10);
+		 m_pPin->m_renderMode = AsPopup;
 #ifdef DEBUG
 	ATLTRACE("CCefSource::Load\n");
 #endif

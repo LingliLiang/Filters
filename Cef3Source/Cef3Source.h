@@ -1,7 +1,48 @@
 #include "BrowserEventHandler.h"
 #include "RingQueue.h"
+#include "ptrutils.h"
 
 class CCefSource;
+
+struct _tagRenderBuffer
+{
+	unsigned long ulBufferSize;
+	unsigned char* pBuffer;
+	unsigned long AddRef()
+	{
+		return ::InterlockedIncrement(&ref);
+	}
+	unsigned long Release()
+	{
+		unsigned long ret = ::InterlockedDecrement(&ref);
+		if (ret == 0)
+		{
+			delete this;
+		}
+		return ret;
+	}
+	bool NewAndCopy(void * src, unsigned long size)
+	{
+		if (pBuffer || !src) return false;
+		pBuffer = new unsigned char[size];
+		if (!pBuffer) return false;
+		ulBufferSize = size;
+		::memcpy_s(pBuffer, ulBufferSize, src, size);
+		return true;
+	}
+	_tagRenderBuffer() :ref(0), pBuffer(NULL), ulBufferSize(0) {}
+	~_tagRenderBuffer()
+	{
+		if (pBuffer && ulBufferSize)
+		{
+			::OutputDebugStringA("~_tagRenderBuffer()\n");
+			delete[] pBuffer;
+			pBuffer = NULL;
+		}
+	}
+private:
+	volatile unsigned long ref;
+};
 
 class CCefPushPin 
 	: public CSourceStream
@@ -55,91 +96,9 @@ private:
 	BOOL m_bGrabBuffer; 
 
 	HANDLE m_hNewRenderEvent;
-	struct _tagRenderBuffer
-	{
-		unsigned long ulBufferSize;
-		unsigned char* pBuffer;
-		unsigned long AddRef()
-		{
-			return ::InterlockedIncrement(&ref);
-		}
-		unsigned long Release()
-		{
-			unsigned long ret = ::InterlockedDecrement(&ref);
-			 if(ret == 0)
-			 {
-				 delete this;
-			 }
-			 return ret;
-		}
-		bool NewAndCopy(void * src, unsigned long size)
-		{
-			if(pBuffer || !src) return false;
-			pBuffer = new unsigned char[size];
-			if(!pBuffer) return false;
-			ulBufferSize = size;
-			::memcpy_s(pBuffer,ulBufferSize,src,size);
-			return true;
-		}
-		_tagRenderBuffer():ref(0),pBuffer(NULL),ulBufferSize(0){}
-		~_tagRenderBuffer()
-		{
-			if(pBuffer && ulBufferSize)
-			{
-				::OutputDebugStringA("~_tagRenderBuffer()\n");
-				delete [] pBuffer;
-				pBuffer = NULL;
-			}
-		}
-	private:
-		volatile unsigned long ref;
-	};
-	
-	template <class T>
-	class ScopedPtr
-	{
-	public:
-		ScopedPtr(T* t)
-		{
-			p_ = t;
-			if (p_)
-				p_->AddRef();
-		}
-		ScopedPtr():p_(0){}
-		~ScopedPtr()
-		{
-			Clear();
-		}
-		ScopedPtr(const ScopedPtr<T>& r): p_(r.p_) 
-		{
-			if (p_)
-				p_->AddRef();
-		}
-		void operator=(const ScopedPtr<T>& r)
-		{
-			Clear();
-			p_ = r.p_;
-			if (p_)
-				p_->AddRef();
-		}
-		void Clear()
-		{
-			if (p_)
-				p_->Release();
-		}
-		T* operator->() const
-		{
-			return p_;
-		}
-		T* get() const
-		{
-			return p_;
-		}
-	private:
-		T* p_;
-	};
 
-	uqueue::RingQueue<ScopedPtr<_tagRenderBuffer>> m_Queue;
+
+	uqueue::RingQueue<PassPtr<_tagRenderBuffer>> m_Queue;
 
 	ULONG m_ulBufferSize;
 
@@ -161,7 +120,7 @@ protected:
 	int m_iRepeatTime;                  // Time in msec between frames
 	int m_nCurrentBitDepth;             // Screen bit depth
 
-
+	BITMAPINFO m_bmpInfo;
 	CMediaType m_MediaType;
 	CCritSec m_cSharedState;            // Protects our internal state
 	CImageDisplay m_Display;            // Figures out our media type for us
