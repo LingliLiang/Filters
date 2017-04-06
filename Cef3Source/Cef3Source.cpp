@@ -19,6 +19,62 @@ const REFERENCE_TIME FPS_1  = UNITS / 1;
 // Default capture and display desktop 10 times per second
 const REFERENCE_TIME rtDefaultFrameLength = FPS_10;
 
+SIZE CalcImgFitSize(unsigned long ulWidth, unsigned long ulHeight, unsigned long image_width, unsigned long image_height)
+	{
+		float x_sc = 0.0;
+		float y_sc = 0.0;
+		int insetDH = 0;
+		int insetDW = 0;
+		long ctl_w = (long)ulWidth;
+		long ctl_h = (long)ulHeight;
+		x_sc = (float)ctl_w/image_width;
+		y_sc = (float)ctl_h/image_height;
+		if(image_width && image_height)
+		{
+			if(image_width > ctl_w && image_height > ctl_h)
+			{
+				if(image_width > image_height)
+				{
+					insetDH = ctl_h - (long)(image_height*x_sc);
+					insetDW = ctl_w - (long)(image_width*x_sc);
+					if(insetDH < 0)
+					{
+						insetDH = ctl_h - (long)(image_height*y_sc);
+						insetDW = ctl_w - (long)(image_width*y_sc);
+					}
+				}
+				else 
+				{
+					insetDH = ctl_h - (long)(image_height*y_sc);
+					insetDW = ctl_w - (long)(image_width*y_sc);
+					if(insetDW < 0)
+					{
+						insetDH = ctl_h - (long)(image_height*x_sc);
+						insetDW = ctl_w - (long)(image_width*x_sc);
+					}
+				}
+			}
+			else if(image_width > ctl_w && image_height < ctl_h)
+			{
+				insetDH = ctl_h - (long)(image_height*x_sc);
+				insetDW = ctl_w - (long)(image_width*x_sc);
+			}
+			else if(image_width < ctl_w && image_height > ctl_h)
+			{
+				insetDH = ctl_h - (long)(image_height*y_sc);
+				insetDW = ctl_w- (long)(image_width*y_sc);
+			}
+			else
+			{
+				insetDH = ctl_h - image_height;
+				insetDW = ctl_w - image_width;
+			}
+		}
+		SIZE inset = {insetDW/2 , insetDH/2 };
+		return inset;
+	}
+
+
 void SaveToFile(HDC hdcWnd,HBITMAP & hSrc,LPCTSTR fileName)
 {
 	BITMAP bmpSrc;
@@ -101,87 +157,7 @@ BOOL CopyWndToByte(HWND hWnd, CRect rect_fitin, BYTE* &pData_out,ULONG cbLen)
 	::ClientToScreen(hWnd,&ptlt);
 	ptlt.x -= wndRc.left;
 	ptlt.y -= wndRc.top;
-	cliRc.OffsetRect(ptlt);
-	int nWidth = cliRc.Width();
-	int nHeight = cliRc.Height();
-
-	HDC hdcScreen;
-	HDC hdcWindow;
-	HDC hdcMemDC = NULL;
-	HBITMAP hbmScreen = NULL;
-
-	// Retrieve the handle to a display device context for the client 
-	// area of the window. 
-	hdcScreen = GetDC(NULL);
-	hdcWindow = GetDC(hWnd);
-
-	// Create a compatible DC which is used in a BitBlt from the window DC
-	hdcMemDC = CreateCompatibleDC(hdcWindow);
-
-	if (!hdcMemDC)
-	{
-		MessageBox(hWnd, L"CreateCompatibleDC has failed", L"Failed", MB_OK);
-		goto done;
-	}
-
-	// Get the client area for size calculation
-	RECT rcClient;
-	GetClientRect(hWnd, &rcClient);
-
-	//This is the best stretch mode
-	SetStretchBltMode(hdcWindow, HALFTONE);
-
-	//The source DC is the entire screen and the destination DC is the current window (HWND)
-	if (!StretchBlt(hdcWindow,
-		0, 0,
-		rcClient.right, rcClient.bottom,
-		hdcScreen,
-		0, 0,
-		GetSystemMetrics(SM_CXSCREEN),
-		GetSystemMetrics(SM_CYSCREEN),
-		SRCCOPY))
-	{
-		MessageBox(hWnd, L"StretchBlt has failed", L"Failed", MB_OK);
-		goto done;
-	}
-
-	// Create a compatible bitmap from the Window DC
-	hbmScreen = CreateCompatibleBitmap(hdcWindow, rcClient.right - rcClient.left, rcClient.bottom - rcClient.top);
-
-	if (!hbmScreen)
-	{
-		MessageBox(hWnd, L"CreateCompatibleBitmap Failed", L"Failed", MB_OK);
-		goto done;
-	}
-
-	// Select the compatible bitmap into the compatible memory DC.
-	SelectObject(hdcMemDC, hbmScreen);
-
-	// Bit block transfer into our compatible memory DC.
-	if (!BitBlt(hdcMemDC,
-		0, 0,
-		rcClient.right - rcClient.left, rcClient.bottom - rcClient.top,
-		hdcWindow,
-		0, 0,
-		SRCCOPY))
-	{
-		MessageBox(hWnd, L"BitBlt has failed", L"Failed", MB_OK);
-		goto done;
-	}
-
-	
-
-	//Clean up
-done:
-	DeleteObject(hbmScreen);
-	DeleteObject(hdcMemDC);
-	ReleaseDC(NULL, hdcScreen);
-	ReleaseDC(hWnd, hdcWindow);
-
-	return 1;
-
-
-
+	//cliRc.OffsetRect(ptlt);
 
 	BITMAPINFOHEADER bphdr = {
 		sizeof(BITMAPINFOHEADER),
@@ -189,32 +165,79 @@ done:
 		rect_fitin.Height(),
 		1,
 		32,
-		BI_RGB,cbLen,
+		BI_RGB,0,
 		0,0,0,0
 	};
 
-	HDC hWndDC = GetDC(hWnd);
-	HDC hCaptureDC = CreateCompatibleDC(hWndDC);
-	HBITMAP hCaptureBitmap = CreateCompatibleBitmap(hWndDC, rect_fitin.Width(), rect_fitin.Height());
-	SelectObject(hCaptureDC, hCaptureBitmap);
-	//BitBlt(hCaptureDC, 0, 0, nWidth, nHeight, hWndDC, 0, 0, SRCCOPY | CAPTUREBLT);
-	//CreateBitmap(rect_fitin.Width(), rect_fitin.Height(), 1, 32, NULL);
-	//only use client are
-	SetStretchBltMode(hCaptureDC, COLORONCOLOR);
-	result = StretchBlt(hCaptureDC, 0, 0, rect_fitin.Width(), rect_fitin.Height(),
-		hWndDC, cliRc.left, cliRc.top, nWidth, nHeight, DIB_RGB_COLORS);
-	err = ::GetLastError();
-	//GetBitmapBits(hScrDC, hBitmap, 0, nHeight, pData, &bphdr, DIB_RGB_COLORS);
-	//assert(pData_out);
+	HDC hdcWindow;
+	HDC hdcMemDC = NULL;
+	HBITMAP hbmWindow = NULL;
+	HBITMAP oldBmp = NULL;
+
+	hdcWindow = GetDC(hWnd);
+
+	// Create a compatible DC which is used in a BitBlt from the window DC
+	hdcMemDC = CreateCompatibleDC(hdcWindow);
+
+	if (!hdcMemDC)
+	{
+		goto done;
+	}
+	// Create a compatible bitmap from the Window DC
+	hbmWindow = CreateCompatibleBitmap(hdcWindow, cliRc.Width(), cliRc.Height());
+
+	if (!hbmWindow)
+	{
+		goto done;
+	}
+
+	// Select the compatible bitmap into the compatible memory DC.
+	oldBmp = (HBITMAP)SelectObject(hdcMemDC, hbmWindow);
+
+	//This is the best stretch mode
+	SetStretchBltMode(hdcMemDC, HALFTONE);
+
+	//The source DC is the entire screen and the destination DC is the current window (HWND)
+	if (!StretchBlt(hdcMemDC,
+		0, 0,
+		cliRc.right, cliRc.bottom,
+		hdcWindow,
+		cliRc.left, cliRc.top,
+		cliRc.right,cliRc.bottom,
+		SRCCOPY))
+	{
+		goto done;
+	}
+
+	
+
+	//// Bit block transfer into our compatible memory DC.
+	//if (!BitBlt(hdcMemDC,
+	//	0, 0,
+	//	cliRc.right, cliRc.bottom,
+	//	hdcWindow,
+	//	cliRc.left, cliRc.top,
+	//	SRCCOPY))
+	//{
+	//	goto done;
+	//}
+
 	pData_out = new BYTE[cbLen];
 	memset(pData_out,0, cbLen);
-	ERROR_INVALID_PARAMETER;
-	result = GetDIBits(hWndDC, hCaptureBitmap, 0, rect_fitin.Height(), pData_out, (BITMAPINFO *) &bphdr, DIB_RGB_COLORS);
-	err = ::GetLastError();
-	ReleaseDC(hWnd, hWndDC);
-	DeleteDC(hCaptureDC);
-	DeleteObject(hCaptureBitmap);
-	return true;
+	GetDIBits(hdcMemDC, hbmWindow, 0,
+		(UINT) bphdr.biHeight,
+		pData_out,
+		(BITMAPINFO *)&bphdr, DIB_RGB_COLORS);
+
+	SelectObject(hdcMemDC,oldBmp);
+	//Clean up
+done:
+	
+	DeleteObject(hbmWindow);
+	DeleteObject(hdcMemDC);
+	ReleaseDC(hWnd, hdcWindow);
+
+	return 1;
 }
 
 /**
