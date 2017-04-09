@@ -158,6 +158,7 @@ BOOL CopyWndToByte(HWND hWnd, CRect rect_fitin, BYTE* &pData_out,ULONG cbLen)
 	ptlt.x -= wndRc.left;
 	ptlt.y -= wndRc.top;
 	//cliRc.OffsetRect(ptlt);
+	
 
 	BITMAPINFOHEADER bphdr = {
 		sizeof(BITMAPINFOHEADER),
@@ -169,12 +170,18 @@ BOOL CopyWndToByte(HWND hWnd, CRect rect_fitin, BYTE* &pData_out,ULONG cbLen)
 		0,0,0,0
 	};
 
+	//CSize inset = CalcImgFitSize(bphdr.biWidth, bphdr.biHeight, cliRc.Width(), cliRc.Height());
+
 	HDC hdcWindow;
 	HDC hdcMemDC = NULL;
 	HBITMAP hbmWindow = NULL;
 	HBITMAP oldBmp = NULL;
 
 	hdcWindow = GetDC(hWnd);
+	if (!hdcWindow)
+	{
+		return 0;
+	}
 
 	// Create a compatible DC which is used in a BitBlt from the window DC
 	hdcMemDC = CreateCompatibleDC(hdcWindow);
@@ -184,7 +191,7 @@ BOOL CopyWndToByte(HWND hWnd, CRect rect_fitin, BYTE* &pData_out,ULONG cbLen)
 		goto done;
 	}
 	// Create a compatible bitmap from the Window DC
-	hbmWindow = CreateCompatibleBitmap(hdcWindow, cliRc.Width(), cliRc.Height());
+	hbmWindow = CreateCompatibleBitmap(hdcWindow, bphdr.biWidth, bphdr.biHeight);
 
 	if (!hbmWindow)
 	{
@@ -222,9 +229,11 @@ BOOL CopyWndToByte(HWND hWnd, CRect rect_fitin, BYTE* &pData_out,ULONG cbLen)
 	//	goto done;
 	//}
 
+	//BOOL hr = PrintWindow(hWnd, hdcMemDC, PW_RENDERFULLCONTENT);
+
 	pData_out = new BYTE[cbLen];
 	memset(pData_out,0, cbLen);
-	GetDIBits(hdcMemDC, hbmWindow, 0,
+	int ret = GetDIBits(hdcMemDC, hbmWindow, 0,
 		(UINT) bphdr.biHeight,
 		pData_out,
 		(BITMAPINFO *)&bphdr, DIB_RGB_COLORS);
@@ -573,11 +582,8 @@ HRESULT CCefPushPin::OnThreadDestroy(void)
 {
 	if (m_renderMode != WindowLess)
 		StopGrabThread();
-	else
-	{
-		if(IsInitialized())
-			UnInit();
-	}
+	if(IsInitialized())
+		UnInit();
 	return __super::OnThreadDestroy();
 }
 
@@ -645,8 +651,11 @@ void CCefPushPin::DoGrab()
 			PassPtr<_tagRenderBuffer> buffer(new _tagRenderBuffer); //auto free
 			if (CopyWndToByte(HBrowser, m_viewRc, buffer->pBuffer, m_ulBufferSize))
 			{
-				buffer->ulBufferSize = m_ulBufferSize;
-				m_Queue.push(buffer); // if failed will drop this frame
+				if (buffer->pBuffer)
+				{
+					buffer->ulBufferSize = m_ulBufferSize;
+					m_Queue.push(buffer); // if failed will drop this frame
+				}
 			}
 			//::SetEvent(m_hNewRenderEvent);
 		}
@@ -767,7 +776,8 @@ HRESULT CCefSource::Load(
 		 }
 		 m_pPin->m_fps = 30;
 		 m_pPin->m_viewRc = CRect(0,0,m_pPin->m_iImageWidth,m_pPin->m_iImageHeight);
-		 m_pPin->m_renderMode = AsPopup;
+		 //m_pPin->m_renderMode = AsPopup;
+		 m_pPin->m_renderMode = WindowLess;
 #ifdef DEBUG
 	ATLTRACE("CCefSource::Load\n");
 #endif

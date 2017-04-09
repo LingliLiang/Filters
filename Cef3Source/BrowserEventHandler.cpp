@@ -4,6 +4,9 @@
 CComModule _Module;
 extern __declspec(selectany) CAtlModule* _pAtlModule=&_Module;
 
+// catch failed error ,not break down entire application
+#define _com_TRY try{
+#define _com_CATCH }catch (_com_error &e){UNREFERENCED_PARAMETER(e);/*e.Description();*/}
 
 CBrowserEventHandler::CBrowserEventHandler()
 	:m_pEndPoint(NULL), m_dwCookie(0),m_pSrc(NULL), m_iidSrc(IID_NULL)
@@ -147,8 +150,8 @@ HRESULT CBrowserBase::UnInit()
 	if (!m_bInit) return E_INVALIDARG;
 	m_spEHander->ReleaseEvent();
 	m_spEHander->Release();
-	m_spBrowser->Close();
-	m_spApp->CloseAll();
+	_com_TRY m_spBrowser->Close(); _com_CATCH;
+	_com_TRY m_spApp->CloseAll(); _com_CATCH;
 	m_spApp = NULL;
 	m_spBrowser = NULL;
 	m_spEHander = NULL;
