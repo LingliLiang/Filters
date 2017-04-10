@@ -776,8 +776,8 @@ HRESULT CCefSource::Load(
 		 }
 		 m_pPin->m_fps = 30;
 		 m_pPin->m_viewRc = CRect(0,0,m_pPin->m_iImageWidth,m_pPin->m_iImageHeight);
-		 //m_pPin->m_renderMode = AsPopup;
-		 m_pPin->m_renderMode = WindowLess;
+		 m_pPin->m_renderMode = AsPopup;
+		 //m_pPin->m_renderMode = WindowLess;
 #ifdef DEBUG
 	ATLTRACE("CCefSource::Load\n");
 #endif

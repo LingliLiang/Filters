@@ -122,6 +122,11 @@ HRESULT CBrowserBase::InitInstance()
 {
 	HRESULT hr = S_OK;
 	if (m_bInit) return E_INVALIDARG;
+	if(m_spEHander!=NULL)
+	{
+		m_spEHander->Release();
+		m_spEHander = NULL;
+	}
 	hr = CComObject<CBrowserEventHandler>::CreateInstance(&m_spEHander);
 	if (FAILED(hr)) return hr;
 	m_spEHander->AddRef();
@@ -151,7 +156,7 @@ HRESULT CBrowserBase::UnInit()
 	m_spEHander->ReleaseEvent();
 	m_spEHander->Release();
 	_com_TRY m_spBrowser->Close(); _com_CATCH;
-	_com_TRY m_spApp->CloseAll(); _com_CATCH;
+	_com_TRY m_spApp->CloseBrowser(m_spBrowser); _com_CATCH;
 	m_spApp = NULL;
 	m_spBrowser = NULL;
 	m_spEHander = NULL;
